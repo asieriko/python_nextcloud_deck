@@ -4,6 +4,11 @@ import traceback
 from functools import partial
 from datetime import datetime, timezone
 
+# --- CAMBIO ---
+# Se importa QDate y QDateEdit para el diálogo de edición
+from PySide6.QtCore import QDate
+from PySide6.QtWidgets import QDateEdit
+
 from data_manager import DataManager
 
 from PySide6.QtCore import (
@@ -68,9 +73,19 @@ STYLE_SHEET = """
     QPushButton#addButton:hover { background-color: #4c566a; }
 
     /* --- Entradas de texto --- */
-    QLineEdit, QTextEdit {
+    QLineEdit, QTextEdit, QDateEdit {
         background-color: #4c566a; border: 1px solid #434c5e;
         padding: 5px; border-radius: 4px; color: #eceff4;
+    }
+    QDateEdit::drop-down {
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 15px;
+        border-left-width: 1px;
+        border-left-color: #434c5e;
+        border-left-style: solid;
+        border-top-right-radius: 3px;
+        border-bottom-right-radius: 3px;
     }
 
     /* --- Columnas de Pilas (Stacks) --- */
@@ -227,24 +242,68 @@ class LoginDialog(QDialog):
 
 
 class CardEditDialog(QDialog):
+    """
+    Diálogo para editar una tarjeta.
+    MODIFICADO: Ahora incluye campos para la fecha y etiquetas.
+    """
+
     def __init__(self, card_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Editar Tarjeta")
         self.setMinimumWidth(400)
+
+        # --- CAMPOS ---
         self.title_edit = QLineEdit(card_data.get('title', ''))
         self.description_edit = QTextEdit(card_data.get('description', ''))
+
+        # Campo de fecha de vencimiento
+        self.duedate_edit = QDateEdit()
+        self.duedate_edit.setCalendarPopup(True)
+        self.duedate_edit.setDisplayFormat("dd/MM/yyyy")
+        duedate_str = card_data.get('duedate')
+        if duedate_str:
+            dt_obj = datetime.fromisoformat(duedate_str.replace('Z', '+00:00'))
+            self.duedate_edit.setDate(QDate(dt_obj.year, dt_obj.month, dt_obj.day))
+        else:
+            self.duedate_edit.setDate(QDate.currentDate())
+
+        # Campo de etiquetas (solo lectura por ahora)
+        self.labels_edit = QLineEdit()
+        self.labels_edit.setReadOnly(True)
+        self.labels_edit.setPlaceholderText("La edición de etiquetas no está implementada")
+        labels_json = card_data.get('labels_json')
+        if labels_json:
+            labels = json.loads(labels_json)
+            self.labels_edit.setText(", ".join([l['title'] for l in labels]))
+
+        # Botones
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept);
         buttons.rejected.connect(self.reject)
+
+        # --- LAYOUT ---
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
         form_layout.addRow("Título:", self.title_edit)
         form_layout.addRow("Descripción:", self.description_edit)
+        form_layout.addRow("Fecha Límite:", self.duedate_edit)
+        form_layout.addRow("Etiquetas:", self.labels_edit)
         layout.addLayout(form_layout)
         layout.addWidget(buttons)
 
-    def get_updated_data(self): return {"title": self.title_edit.text(),
-                                        "description": self.description_edit.toPlainText()}
+    def get_updated_data(self):
+        """Devuelve los datos actualizados del diálogo."""
+        data = {
+            "title": self.title_edit.text(),
+            "description": self.description_edit.toPlainText()
+        }
+
+        # Formatear la fecha a ISO 8601 para la API
+        q_date = self.duedate_edit.date()
+        dt_obj = datetime(q_date.year(), q_date.month(), q_date.day(), 12, 0, 0, tzinfo=timezone.utc)
+        data['duedate'] = dt_obj.isoformat().replace('+00:00', 'Z')
+
+        return data
 
 
 class GenericCreateDialog(QDialog):
@@ -273,8 +332,6 @@ class KanbanApp(QMainWindow):
         self.data_manager = DataManager()
         self.current_board_id = None
         self.threadpool = QThreadPool()
-        # --- CAMBIO ---
-        # Conjunto para mantener una referencia a los workers activos y evitar que el GC los elimine
         self.active_workers = set()
 
         self.splitter = QSplitter(Qt.Horizontal);
@@ -311,10 +368,8 @@ class KanbanApp(QMainWindow):
         worker.signals.result.connect(on_success)
         worker.signals.error.connect(lambda err: self.show_error(f"{on_error_msg}: {err[1]}"))
 
-        # --- CAMBIO ---
-        # Función de limpieza que se llamará cuando el worker termine
         def cleanup():
-            self.active_workers.discard(worker)  # Eliminar la referencia
+            self.active_workers.discard(worker)
             if on_finish:
                 on_finish()
             else:
@@ -322,8 +377,6 @@ class KanbanApp(QMainWindow):
 
         worker.signals.finished.connect(cleanup)
 
-        # --- CAMBIO ---
-        # Añadir el worker al conjunto para mantenerlo vivo
         self.active_workers.add(worker)
         self.threadpool.start(worker)
 
