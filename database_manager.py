@@ -25,11 +25,9 @@ class DatabaseManager:
             cursor.execute(query, params)
             result = None
             if fetchone:
-                # --- CORRECCIÓN ---
-                # Se llama a fetchone() una sola vez y se guarda el resultado
+                # Corregido: Llamar a fetchone solo una vez
                 row = cursor.fetchone()
-                if row:
-                    result = dict(row)
+                result = dict(row) if row else None
             if fetchall:
                 result = [dict(row) for row in cursor.fetchall()]
             if commit:
@@ -42,8 +40,9 @@ class DatabaseManager:
         self._execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)", commit=True)
         self._execute("CREATE TABLE IF NOT EXISTS boards (id INTEGER PRIMARY KEY, title TEXT NOT NULL, color TEXT)",
                       commit=True)
+        # --- CAMBIO --- Se añade la columna "order" a la tabla de stacks
         self._execute(
-            "CREATE TABLE IF NOT EXISTS stacks (id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL, title TEXT NOT NULL, FOREIGN KEY (board_id) REFERENCES boards (id) ON DELETE CASCADE)",
+            "CREATE TABLE IF NOT EXISTS stacks (id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL, title TEXT NOT NULL, \"order\" INTEGER, FOREIGN KEY (board_id) REFERENCES boards (id) ON DELETE CASCADE)",
             commit=True)
         self._execute(
             "CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, board_id INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, duedate TEXT, labels_json TEXT)",
@@ -55,11 +54,8 @@ class DatabaseManager:
     # --- Credenciales ---
     def save_credentials(self, url, username, password):
         encoded_pass = base64.b64encode(password.encode()).decode()
-        # Usar múltiples sentencias para claridad y compatibilidad
-        self._execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ('deck_url', url), commit=True)
-        self._execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ('username', username), commit=True)
-        self._execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ('password', encoded_pass),
-                      commit=True)
+        self._execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?), (?, ?), (?, ?)",
+                      ('deck_url', url, 'username', username, 'password', encoded_pass), commit=True)
 
     def load_credentials(self):
         creds = {}
@@ -92,8 +88,9 @@ class DatabaseManager:
         self._execute("DELETE FROM cards WHERE board_id = ?", (board_id,), commit=True)
         if stacks:
             for stack in stacks:
-                self._execute("INSERT OR REPLACE INTO stacks (id, board_id, title) VALUES (?, ?, ?)",
-                              (stack['id'], board_id, stack['title']), commit=True)
+                # --- CAMBIO --- Se guarda el valor de "order"
+                self._execute("INSERT OR REPLACE INTO stacks (id, board_id, title, \"order\") VALUES (?, ?, ?, ?)",
+                              (stack['id'], board_id, stack['title'], stack.get('order')), commit=True)
                 cards_from_stack = stack.get('cards', [])
                 if cards_from_stack:
                     for card in cards_from_stack:

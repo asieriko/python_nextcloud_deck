@@ -71,18 +71,16 @@ class DataManager:
         return self.db.get_stacks(board_id)
 
     def get_cards(self, board_id, stack_id):
-        # Esta función no necesita sincronizar, ya que get_stacks lo hace.
-        # Simplemente lee desde la base de datos local.
         return self.db.get_cards(stack_id)
 
     # --- Métodos de Creación/Actualización ---
     def _execute_or_queue(self, method, endpoint, payload):
         if self.is_online():
             try:
-                # Usamos _api_request para manejar el método genéricamente
                 return self.api._api_request(method, endpoint, payload)
             except requests.exceptions.RequestException as e:
-                print(f"La acción falló, se encolará: {e}")
+                print(
+                    f"La acción API falló. Revisa los 'DETALLES DEL ERROR HTTP' impresos arriba. El cambio se encolará para reintentar más tarde. Error: {e}")
                 self.db.queue_offline_change(method, endpoint, payload)
                 return None
         else:
@@ -93,10 +91,32 @@ class DataManager:
         return self._execute_or_queue('POST', 'boards', {'title': title, 'color': color})
 
     def create_stack(self, board_id, title):
-        return self._execute_or_queue('POST', f'boards/{board_id}/stacks', {'title': title})
+        # --- CAMBIO ---
+        # Calcular el nuevo 'order' para la pila
+        stacks = self.db.get_stacks(board_id)
+        if stacks:
+            # Encuentra el 'order' máximo y le suma 1. Usa 0 como default si una pila no tuviera 'order'.
+            max_order = max(s.get('order', 0) for s in stacks if s.get('order') is not None) if any(
+                s.get('order') is not None for s in stacks) else 0
+            new_order = max_order + 1
+        else:
+            new_order = 1
+
+        payload = {'title': title, 'order': new_order}
+        return self._execute_or_queue('POST', f'boards/{board_id}/stacks', payload)
 
     def create_card(self, board_id, stack_id, title):
-        return self._execute_or_queue('POST', f'boards/{board_id}/stacks/{stack_id}/cards', {'title': title})
+        # Calcular el nuevo 'order' para la tarjeta
+        cards = self.db.get_cards(stack_id)
+        if cards:
+            max_order = max(c.get('order', 0) for c in cards if c.get('order') is not None) if any(
+                c.get('order') is not None for c in cards) else 0
+            new_order = max_order + 1
+        else:
+            new_order = 1
+
+        payload = {'title': title, 'order': new_order}
+        return self._execute_or_queue('POST', f'boards/{board_id}/stacks/{stack_id}/cards', payload)
 
     def update_card(self, board_id, stack_id, card_id, **kwargs):
         return self._execute_or_queue('PUT', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}', kwargs)

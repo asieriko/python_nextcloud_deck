@@ -4,8 +4,6 @@ import traceback
 from functools import partial
 from datetime import datetime, timezone
 
-# --- CAMBIO ---
-# Se importa QDate y QDateEdit para el diálogo de edición
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QDateEdit
 
@@ -242,21 +240,14 @@ class LoginDialog(QDialog):
 
 
 class CardEditDialog(QDialog):
-    """
-    Diálogo para editar una tarjeta.
-    MODIFICADO: Ahora incluye campos para la fecha y etiquetas.
-    """
-
     def __init__(self, card_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Editar Tarjeta")
         self.setMinimumWidth(400)
 
-        # --- CAMPOS ---
         self.title_edit = QLineEdit(card_data.get('title', ''))
         self.description_edit = QTextEdit(card_data.get('description', ''))
 
-        # Campo de fecha de vencimiento
         self.duedate_edit = QDateEdit()
         self.duedate_edit.setCalendarPopup(True)
         self.duedate_edit.setDisplayFormat("dd/MM/yyyy")
@@ -267,7 +258,6 @@ class CardEditDialog(QDialog):
         else:
             self.duedate_edit.setDate(QDate.currentDate())
 
-        # Campo de etiquetas (solo lectura por ahora)
         self.labels_edit = QLineEdit()
         self.labels_edit.setReadOnly(True)
         self.labels_edit.setPlaceholderText("La edición de etiquetas no está implementada")
@@ -276,12 +266,10 @@ class CardEditDialog(QDialog):
             labels = json.loads(labels_json)
             self.labels_edit.setText(", ".join([l['title'] for l in labels]))
 
-        # Botones
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept);
         buttons.rejected.connect(self.reject)
 
-        # --- LAYOUT ---
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
         form_layout.addRow("Título:", self.title_edit)
@@ -292,13 +280,11 @@ class CardEditDialog(QDialog):
         layout.addWidget(buttons)
 
     def get_updated_data(self):
-        """Devuelve los datos actualizados del diálogo."""
         data = {
             "title": self.title_edit.text(),
             "description": self.description_edit.toPlainText()
         }
 
-        # Formatear la fecha a ISO 8601 para la API
         q_date = self.duedate_edit.date()
         dt_obj = datetime(q_date.year(), q_date.month(), q_date.day(), 12, 0, 0, tzinfo=timezone.utc)
         data['duedate'] = dt_obj.isoformat().replace('+00:00', 'Z')
@@ -493,7 +479,14 @@ class KanbanApp(QMainWindow):
         dialog = GenericCreateDialog("Crear Nuevo Tablero", ["Título:", "Color (hex):"], self)
         if dialog.exec() == QDialog.Accepted:
             title, color = dialog.get_values()
-            if not title or not color: self.show_error("El título y el color son obligatorios."); return
+            # --- CAMBIO ---
+            # Se añade validación para el título y el color
+            title = title.strip()
+            color = color.strip()
+            if not all([title, color]):
+                self.show_error("El título y el color no pueden estar vacíos.");
+                return
+
             self.status_label.setText("Creando tablero...")
             self.run_worker(lambda: self.data_manager.create_board(title, f"#{color.lstrip('#')}"),
                             lambda b: self.load_boards(), "Error al crear tablero")
@@ -511,8 +504,13 @@ class KanbanApp(QMainWindow):
     def add_new_stack(self):
         dialog = GenericCreateDialog("Crear Nueva Lista", ["Título:"], self)
         if dialog.exec() == QDialog.Accepted:
-            title = dialog.get_values()[0]
-            if not title: self.show_error("El título es obligatorio."); return
+            # --- CAMBIO ---
+            # Se añade validación para el título
+            title = dialog.get_values()[0].strip()
+            if not title:
+                self.show_error("El título no puede estar vacío.");
+                return
+
             self.status_label.setText("Creando lista...")
             self.run_worker(lambda: self.data_manager.create_stack(self.current_board_id, title),
                             lambda s: self.load_board(self.current_board_id), "Error al crear lista")
@@ -520,8 +518,13 @@ class KanbanApp(QMainWindow):
     def add_new_card(self, stack_id, card_list_widget):
         dialog = GenericCreateDialog("Crear Nueva Tarjeta", ["Título:"], self)
         if dialog.exec() == QDialog.Accepted:
-            title = dialog.get_values()[0]
-            if not title: self.show_error("El título es obligatorio."); return
+            # --- CAMBIO ---
+            # Se añade validación para el título
+            title = dialog.get_values()[0].strip()
+            if not title:
+                self.show_error("El título no puede estar vacío.");
+                return
+
             self.status_label.setText("Creando tarjeta...")
             on_success = lambda c: self.refresh_cards_for_stack(self.current_board_id, stack_id, card_list_widget)
             self.run_worker(lambda: self.data_manager.create_card(self.current_board_id, stack_id, title), on_success,

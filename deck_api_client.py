@@ -1,11 +1,13 @@
 import requests
 from requests.auth import HTTPBasicAuth
 
+
 class DeckAPIClient:
     """
     Un cliente de Python para interactuar con la API de Nextcloud Deck.
     Se encarga exclusivamente de las peticiones HTTP.
     """
+
     def __init__(self, url, username, password):
         self.base_url = f"{url.rstrip('/')}/index.php/apps/deck/api/v1.0"
         self.session = requests.Session()
@@ -23,7 +25,20 @@ class DeckAPIClient:
         """Método auxiliar para realizar peticiones a la API."""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         response = self.session.request(method, url, json=data)
-        response.raise_for_status()  # Lanza una excepción para errores HTTP (4xx o 5xx)
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            # --- INICIO DEL CAMBIO ---
+            # Imprimimos información de depuración detallada en caso de error HTTP
+            print("\n--- DETALLES DEL ERROR HTTP ---")
+            print(f"Petición: {method} {url}")
+            print(f"Código de Estado: {response.status_code}")
+            print(f"Respuesta del Servidor: {response.text}")
+            print("-----------------------------\n")
+            # --- FIN DEL CAMBIO ---
+            raise e  # Volvemos a lanzar la excepción para que el resto del programa la maneje
+
         return response.json() if response.status_code != 204 else None
 
     # --- Métodos de la API ---
