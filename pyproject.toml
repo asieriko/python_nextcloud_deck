@@ -1,0 +1,11 @@
+[project]
+name = "pydeck"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "pyside6>=6.10.0",
+    "pytest>=8.4.2",
+    "pytest-qt>=4.5.0",
+    "requests>=2.32.5",
+]
