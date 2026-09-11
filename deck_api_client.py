@@ -29,15 +29,12 @@ class DeckAPIClient:
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            # --- INICIO DEL CAMBIO ---
-            # Imprimimos información de depuración detallada en caso de error HTTP
             print("\n--- DETALLES DEL ERROR HTTP ---")
             print(f"Petición: {method} {url}")
             print(f"Código de Estado: {response.status_code}")
             print(f"Respuesta del Servidor: {response.text}")
             print("-----------------------------\n")
-            # --- FIN DEL CAMBIO ---
-            raise e  # Volvemos a lanzar la excepción para que el resto del programa la maneje
+            raise e
 
         return response.json() if response.status_code != 204 else None
 
@@ -51,12 +48,17 @@ class DeckAPIClient:
     def create_board(self, title, color):
         return self._api_request('POST', 'boards', data={'title': title, 'color': color})
 
-    def create_stack(self, board_id, title):
-        return self._api_request('POST', f'boards/{board_id}/stacks', data={'title': title})
+    def create_stack(self, board_id, title, order):
+        return self._api_request('POST', f'boards/{board_id}/stacks', data={'title': title, 'order': order})
 
-    def create_card(self, board_id, stack_id, title):
-        return self._api_request('POST', f'boards/{board_id}/stacks/{stack_id}/cards', data={'title': title})
+    def create_card(self, board_id, stack_id, title, order):
+        return self._api_request('POST', f'boards/{board_id}/stacks/{stack_id}/cards',
+                                 data={'title': title, 'order': order})
 
     def update_card(self, board_id, stack_id, card_id, **kwargs):
         return self._api_request('PUT', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}', data=kwargs)
+
+    def delete_stack(self, board_id, stack_id):
+        """Envía una petición DELETE para eliminar una pila."""
+        return self._api_request('DELETE', f'boards/{board_id}/stacks/{stack_id}')
 

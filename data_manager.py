@@ -73,7 +73,7 @@ class DataManager:
     def get_cards(self, board_id, stack_id):
         return self.db.get_cards(stack_id)
 
-    # --- Métodos de Creación/Actualización ---
+    # --- Métodos de Creación/Actualización/Eliminación ---
     def _execute_or_queue(self, method, endpoint, payload):
         if self.is_online():
             try:
@@ -91,11 +91,8 @@ class DataManager:
         return self._execute_or_queue('POST', 'boards', {'title': title, 'color': color})
 
     def create_stack(self, board_id, title):
-        # --- CAMBIO ---
-        # Calcular el nuevo 'order' para la pila
         stacks = self.db.get_stacks(board_id)
         if stacks:
-            # Encuentra el 'order' máximo y le suma 1. Usa 0 como default si una pila no tuviera 'order'.
             max_order = max(s.get('order', 0) for s in stacks if s.get('order') is not None) if any(
                 s.get('order') is not None for s in stacks) else 0
             new_order = max_order + 1
@@ -106,7 +103,6 @@ class DataManager:
         return self._execute_or_queue('POST', f'boards/{board_id}/stacks', payload)
 
     def create_card(self, board_id, stack_id, title):
-        # Calcular el nuevo 'order' para la tarjeta
         cards = self.db.get_cards(stack_id)
         if cards:
             max_order = max(c.get('order', 0) for c in cards if c.get('order') is not None) if any(
@@ -120,4 +116,8 @@ class DataManager:
 
     def update_card(self, board_id, stack_id, card_id, **kwargs):
         return self._execute_or_queue('PUT', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}', kwargs)
+
+    def delete_stack(self, board_id, stack_id):
+        """Orquesta la eliminación de una pila."""
+        return self._execute_or_queue('DELETE', f'boards/{board_id}/stacks/{stack_id}', payload=None)
 
