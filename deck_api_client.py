@@ -1,5 +1,6 @@
 import requests
 from requests.auth import HTTPBasicAuth
+import json
 
 
 class DeckAPIClient:
@@ -24,6 +25,21 @@ class DeckAPIClient:
     def _api_request(self, method, endpoint, data=None):
         """Método auxiliar para realizar peticiones a la API."""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        # Debug: print outgoing request
+        try:
+            print("\n--- PETICIÓN SALIENTE ---")
+            print(f"Petición: {method} {url}")
+            print(f"Headers: {self.session.headers}")
+            if data is not None:
+                try:
+                    print("Payload:", json.dumps(data, ensure_ascii=False))
+                except Exception:
+                    print("Payload (repr):", repr(data))
+            else:
+                print("Payload: None")
+        except Exception:
+            pass
+
         response = self.session.request(method, url, json=data)
 
         try:
@@ -46,7 +62,13 @@ class DeckAPIClient:
         return self._api_request('GET', f'boards/{board_id}/stacks')
 
     def create_board(self, title, color):
-        return self._api_request('POST', 'boards', data={'title': title, 'color': color})
+        # sanitize color: Deck expects hex without leading '#' and max 6 chars
+        if color is not None:
+            clean_color = color.lstrip('#')[:6].lower()
+            payload = {'title': title, 'color': clean_color}
+        else:
+            payload = {'title': title}
+        return self._api_request('POST', 'boards', data=payload)
 
     def create_stack(self, board_id, title, order):
         return self._api_request('POST', f'boards/{board_id}/stacks', data={'title': title, 'order': order})
@@ -56,6 +78,17 @@ class DeckAPIClient:
                                  data={'title': title, 'order': order})
 
     def update_card(self, board_id, stack_id, card_id, **kwargs):
+        # Ensure 'type' is present; fetch existing card if necessary
+        if not kwargs.get('type'):
+            try:
+                existing = self._api_request('GET', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}')
+                if existing and isinstance(existing, dict) and 'type' in existing:
+                    kwargs['type'] = existing['type']
+                else:
+                    kwargs['type'] = 'plain'  # API expects string 'plain'
+            except requests.exceptions.RequestException:
+                # couldn't fetch existing, ensure non-empty type to avoid API error
+                kwargs['type'] = 'plain'
         return self._api_request('PUT', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}', data=kwargs)
 
     def delete_stack(self, board_id, stack_id):

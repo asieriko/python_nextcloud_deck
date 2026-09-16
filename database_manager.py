@@ -45,8 +45,13 @@ class DatabaseManager:
             "CREATE TABLE IF NOT EXISTS stacks (id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL, title TEXT NOT NULL, \"order\" INTEGER, FOREIGN KEY (board_id) REFERENCES boards (id) ON DELETE CASCADE)",
             commit=True)
         self._execute(
-            "CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, board_id INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, duedate TEXT, labels_json TEXT)",
+            "CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, board_id INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, duedate TEXT, labels_json TEXT, owner TEXT)",
             commit=True)
+        # Ensure owner column exists (for existing DBs)
+        try:
+            self._execute("ALTER TABLE cards ADD COLUMN owner TEXT", commit=True)
+        except Exception:
+            pass  # Column already exists
         self._execute(
             "CREATE TABLE IF NOT EXISTS offline_changes (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT NOT NULL, endpoint TEXT NOT NULL, payload TEXT)",
             commit=True)
@@ -94,10 +99,15 @@ class DatabaseManager:
                 cards_from_stack = stack.get('cards', [])
                 if cards_from_stack:
                     for card in cards_from_stack:
+                        # Extract owner: API may return it as dict {uid:...} or string
+                        owner = card.get('owner')
+                        if isinstance(owner, dict):
+                            owner = owner.get('uid') or owner.get('username')
+                        
                         self._execute(
-                            "INSERT OR REPLACE INTO cards (id, stack_id, board_id, title, description, duedate, labels_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT OR REPLACE INTO cards (id, stack_id, board_id, title, description, duedate, labels_json, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (card['id'], stack['id'], board_id, card['title'], card.get('description'),
-                             card.get('duedate'), json.dumps(card.get('labels', []))),
+                             card.get('duedate'), json.dumps(card.get('labels', [])), owner),
                             commit=True
                         )
 
@@ -107,14 +117,25 @@ class DatabaseManager:
     def get_cards(self, stack_id):
         return self._execute("SELECT * FROM cards WHERE stack_id = ?", (stack_id,), fetchall=True)
 
+    def get_card_by_id(self, card_id):
+        return self._execute("SELECT * FROM cards WHERE id = ?", (card_id,), fetchone=True)
+
     # --- Cambios Offline ---
     def queue_offline_change(self, method, endpoint, payload):
+        # Sanitize payload before queuing to avoid API validation errors (e.g., color with leading '#')
+        if isinstance(payload, dict) and 'color' in payload and payload.get('color') is not None:
+            color = str(payload.get('color'))
+            clean_color = color.lstrip('#')[:6].lower()
+            payload = dict(payload)
+            payload['color'] = clean_color
+
+        # store payload as JSON (or NULL if no payload)
+        payload_json = json.dumps(payload) if payload is not None else None
         self._execute("INSERT INTO offline_changes (method, endpoint, payload) VALUES (?, ?, ?)",
-                      (method.upper(), endpoint, json.dumps(payload)), commit=True)
+                      (method.upper(), endpoint, payload_json), commit=True)
 
     def get_offline_changes(self):
         return self._execute("SELECT * FROM offline_changes ORDER BY id", fetchall=True)
 
     def delete_offline_change(self, change_id):
         self._execute("DELETE FROM offline_changes WHERE id = ?", (change_id,), commit=True)
-

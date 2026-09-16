@@ -294,21 +294,42 @@ class CardListWidget(QListWidget):
 
     def startDrag(self, supportedActions):
         item = self.currentItem()
-        if item:
-            self._dragged_card = item.data(Qt.UserRole)
-        super().startDrag(supportedActions)
+        if not item:
+            return
+        card = item.data(Qt.UserRole)
+        from PySide6.QtGui import QDrag, QMimeData
+        drag = QDrag(self)
+        mime = QMimeData()
+        try:
+            mime.setData('application/x-card', json.dumps(card).encode())
+        except Exception:
+            mime.setText(str(card.get('id')) if isinstance(card, dict) else str(card))
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
 
     def dropEvent(self, event):
-        super().dropEvent(event)
-        # After the default handling, notify parent to perform backend move
-        if self._dragged_card:
-            card = self._dragged_card
-            if self.move_callback:
+        # Read card data from mime (set by source list)
+        try:
+            md = event.mimeData()
+            card = None
+            if md and md.hasFormat('application/x-card'):
+                raw = bytes(md.data('application/x-card'))
+                try:
+                    card = json.loads(raw.decode())
+                except Exception:
+                    card = None
+            # Let the default insertion happen
+            super().dropEvent(event)
+            # Notify backend move
+            if card and self.move_callback:
                 try:
                     self.move_callback(card, self.board_id, self.stack_id)
                 except Exception:
                     pass
-        self._dragged_card = None
+        except Exception:
+            super().dropEvent(event)
+        finally:
+            self._dragged_card = None
 
 
 class DraggableTitleBar(QFrame):
@@ -386,6 +407,52 @@ class LoginDialog(QDialog):
     def get_credentials(self): return (self.url.text(), self.username.text(), self.password.text())
 
 
+class CardCreateDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Crear Nueva Tarjeta")
+        self.setMinimumWidth(400)
+
+        self.title_edit = QLineEdit()
+        self.description_edit = QTextEdit()
+
+        # Optional due date: checkbox + date picker
+        from PySide6.QtWidgets import QCheckBox
+        self.duedate_checkbox = QCheckBox("Añadir fecha límite")
+        self.duedate_edit = QDateEdit()
+        self.duedate_edit.setCalendarPopup(True)
+        self.duedate_edit.setDisplayFormat("dd/MM/yyyy")
+        self.duedate_edit.setDate(QDate.currentDate())
+        self.duedate_edit.setEnabled(False)
+        self.duedate_checkbox.toggled.connect(self.duedate_edit.setEnabled)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+        form_layout.addRow("Título:", self.title_edit)
+        form_layout.addRow("Descripción:", self.description_edit)
+        form_layout.addRow(self.duedate_checkbox)
+        form_layout.addRow("", self.duedate_edit)
+        layout.addLayout(form_layout)
+        layout.addWidget(buttons)
+
+    def get_card_data(self):
+        data = {
+            "title": self.title_edit.text(),
+            "description": self.description_edit.toPlainText()
+        }
+
+        if self.duedate_checkbox.isChecked():
+            q_date = self.duedate_edit.date()
+            dt_obj = datetime(q_date.year(), q_date.month(), q_date.day(), 12, 0, 0, tzinfo=timezone.utc)
+            data['duedate'] = dt_obj.isoformat().replace('+00:00', 'Z')
+
+        return data
+
+
 class CardEditDialog(QDialog):
     def __init__(self, card_data, parent=None):
         super().__init__(parent)
@@ -444,15 +511,35 @@ class GenericCreateDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title);
         self.setMinimumWidth(350)
-        self.inputs = [QLineEdit() for _ in labels]
+        self.inputs = []
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept);
         buttons.rejected.connect(self.reject)
         layout = QFormLayout(self)
-        for label, input_widget in zip(labels, self.inputs): layout.addRow(label, input_widget)
+        # If a label indicates color, show a dropdown with presets
+        color_presets = ["#5e81ac", "#a3be8c", "#bf616a", "#d08770", "#88c0d0"]
+        for label in labels:
+            if 'color' in label.lower():
+                from PySide6.QtWidgets import QComboBox
+                combo = QComboBox()
+                for c in color_presets:
+                    combo.addItem(c)
+                self.inputs.append(combo)
+                layout.addRow(label, combo)
+            else:
+                input_widget = QLineEdit()
+                self.inputs.append(input_widget)
+                layout.addRow(label, input_widget)
         layout.addWidget(buttons)
 
-    def get_values(self): return [widget.text().strip() for widget in self.inputs]
+    def get_values(self):
+        vals = []
+        for widget in self.inputs:
+            if hasattr(widget, 'currentText'):
+                vals.append(widget.currentText().strip())
+            else:
+                vals.append(widget.text().strip())
+        return vals
 
 
 # --- VENTANA PRINCIPAL ---
@@ -495,7 +582,7 @@ class KanbanApp(QMainWindow):
 
         self.status_label = QLabel("Inicializando...");
         self.statusBar().addPermanentWidget(self.status_label)
-        self.show()
+        self.showMaximized()
         self.init_app()
 
     def run_worker(self, fn, on_success, on_error_msg, on_finish=None):
@@ -714,14 +801,25 @@ class KanbanApp(QMainWindow):
                             lambda s: self.load_board(self.current_board_id), "Error al crear lista")
 
     def add_new_card(self, stack_id, card_list_widget):
-        dialog = GenericCreateDialog("Crear Nueva Tarjeta", ["Título:"], self)
+        dialog = CardCreateDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            title = dialog.get_values()[0]
-            if not title: self.show_error("El título es obligatorio."); return
+            card_data = dialog.get_card_data()
+            title = card_data.get('title', '').strip()
+            if not title:
+                self.show_error("El título es obligatorio.")
+                return
             self.status_label.setText("Creando tarjeta...")
-            on_success = lambda c: self.refresh_cards_for_stack(self.current_board_id, stack_id, card_list_widget)
-            self.run_worker(lambda: self.data_manager.create_card(self.current_board_id, stack_id, title), on_success,
-                            "Error al crear tarjeta")
+            # Pass description and duedate to create_card if provided
+            on_success = lambda c: self.load_board(self.current_board_id)
+            self.run_worker(
+                lambda: self.data_manager.create_card(
+                    self.current_board_id, stack_id, title,
+                    description=card_data.get('description', ''),
+                    duedate=card_data.get('duedate')
+                ),
+                on_success,
+                "Error al crear tarjeta"
+            )
 
     def edit_card(self, item):
         card_data = item.data(Qt.UserRole)
@@ -764,7 +862,7 @@ class KanbanApp(QMainWindow):
 
         def do_move():
             # call update_card with original board/stack and payload specifying new stack
-            return self.data_manager.update_card(card_data['board_id'], card_data['stack_id'], card_data['id'], stack_id=dest_stack_id)
+            return self.data_manager.update_card(card_data['board_id'], card_data['stack_id'], card_data['id'], new_stack_id=dest_stack_id)
 
         def on_success(result):
             # Refresh current board if affected
@@ -847,20 +945,31 @@ class KanbanApp(QMainWindow):
         menu = QMenu(self)
         move_menu = menu.addMenu("Mover a")
 
+        # First group: lists (stacks) in the same board as the card
+        same_stacks = self.data_manager.db.get_stacks(card['board_id'])
+        for s in same_stacks:
+            action = move_menu.addAction(s['title'])
+            action.triggered.connect(lambda checked=False, c=card, bid=card['board_id'], sid=s['id']: self.move_card(c, bid, sid))
+
+        move_menu.addSeparator()
+
+        # Second group: other boards with their lists
         boards = self.data_manager.db.get_boards()
         for b in boards:
+            if b['id'] == card['board_id']:
+                continue
             b_sub = move_menu.addMenu(b['title'])
             stacks = self.data_manager.db.get_stacks(b['id'])
             for s in stacks:
                 action = b_sub.addAction(s['title'])
-                action.triggered.connect(partial(self.move_card, card, b['id'], s['id']))
+                action.triggered.connect(lambda checked=False, c=card, bid=b['id'], sid=s['id']: self.move_card(c, bid, sid))
             # Option to create new list in this board
             action_new = b_sub.addAction("Nueva lista...")
-            action_new.triggered.connect(partial(self.create_and_move_card_to_new_list, card, b['id']))
+            action_new.triggered.connect(lambda checked=False, c=card, bid=b['id']: self.create_and_move_card_to_new_list(c, bid))
 
         menu.addSeparator()
-        action_new_board = menu.addAction("Crear nuevo tablero...")
-        action_new_board.triggered.connect(partial(self.create_board_and_move_card, card))
+        action_new_board = menu.addAction("Mover a nuevo tablero y lista...")
+        action_new_board.triggered.connect(lambda checked=False, c=card: self.create_board_and_move_card(c))
 
         menu.exec(list_widget.mapToGlobal(pos))
 
@@ -873,10 +982,10 @@ class KanbanApp(QMainWindow):
             if b['id'] == board_id:
                 continue
             action = move_menu.addAction(b['title'])
-            action.triggered.connect(partial(self.move_stack, board_id, stack['id'], stack['title'], b['id']))
+            action.triggered.connect(lambda checked=False, ob=board_id, sid=stack['id'], stitle=stack['title'], dbid=b['id']: self.move_stack(ob, sid, stitle, dbid))
         menu.addSeparator()
         action_new_board = menu.addAction("Crear nuevo tablero...")
-        action_new_board.triggered.connect(partial(self.create_and_move_stack, board_id, stack))
+        action_new_board.triggered.connect(lambda checked=False, ob=board_id, st=stack: self.create_and_move_stack(ob, st))
 
         # Attempt to determine widget to map position; fallback to cursor
         sender = self.sender()
@@ -958,4 +1067,3 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = KanbanApp()
     sys.exit(app.exec())
-
