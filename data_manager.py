@@ -49,7 +49,7 @@ class DataManager:
                     if len(parts) >= 5 and parts[0] == 'boards' and parts[2] == 'stacks' and parts[4].startswith('cards'):
                         card_id = None
                         try:
-                            card_id = int(parts[5]) if len(parts) > 5 else None
+                            card_id = int(parts[-1]) if parts[-1].isdigit() else None
                         except Exception:
                             card_id = None
 
@@ -215,10 +215,12 @@ class DataManager:
                 pass
 
         if new_stack_id is not None:
-            # map to payload 'stack_id' expected by the API without conflicting with positional arg
-            payload['stack_id'] = new_stack_id
-        
-        return self._execute_or_queue('PUT', f'boards/{board_id}/stacks/{stack_id}/cards/{card_id}', payload)
+            # Move the card by targeting the destination stack in the endpoint.
+            endpoint_stack_id = new_stack_id
+        else:
+            endpoint_stack_id = stack_id
+
+        return self._execute_or_queue('PUT', f'boards/{board_id}/stacks/{endpoint_stack_id}/cards/{card_id}', payload)
 
     def delete_stack(self, board_id, stack_id):
         """Orquesta la eliminación de una pila."""

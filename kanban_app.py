@@ -113,13 +113,20 @@ STYLE_SHEET = """
         background-color: transparent;
     }
     QListWidget#cardList {
-        background-color: transparent; border: none;
+        background-color: transparent;
+        border: none;
+        padding-right: 8px;
     }
     QListWidget#cardList::item {
         border: none;
         padding: 0px;
-        margin: 0px;
-        background-color: transparent;
+        margin: 4px 8px 4px 4px;
+        background-color: #FEF9E7;
+        border-radius: 4px;
+    }
+    QListWidget#cardList::item:selected {
+        background-color: #FEF08A;
+        border: 1px solid #88c0d0;
     }
 
     /* --- Widget de Tarjeta Personalizado --- */
@@ -135,10 +142,13 @@ STYLE_SHEET = """
     QLabel#cardTitle {
         font-weight: bold;
         font-size: 11pt;
+        background-color: transparent;
+        color: #422006;
     }
     QLabel#cardDueDate {
         font-size: 8pt;
         color: #b48ead;
+        background-color: transparent;
     }
     QLabel#cardDueDate.overdue, QDateEdit.overdue {
         color: #bf616a;
@@ -227,46 +237,12 @@ class CardWidget(QWidget):
             dt_obj = datetime.fromisoformat(duedate_str.replace('Z', '+00:00'))
             is_overdue = dt_obj < datetime.now(timezone.utc)
 
-            date_edit = QDateEdit()
-            date_edit.setDate(QDate(dt_obj.year, dt_obj.month, dt_obj.day))
-            date_edit.setCalendarPopup(True)
-            date_edit.setReadOnly(True) # User cannot type, but can pick from calendar? No, readOnly prevents editing.
-            # If we want it to be just a display that looks like a calendar picker but is not editable here (only in edit dialog):
-            # The requirement says "The date in the cards is not editable, it should display a calendar widget to pick it"
-            # This is slightly ambiguous. "not editable" usually means read-only. "display a calendar widget to pick it" implies interaction.
-            # However, usually in Kanban cards on the board are read-only summaries. Editing happens in the detail view.
-            # If the user meant "The date in the cards (in the board view) is currently just text, but I want to be able to change it directly from the card using a calendar widget", then I should make it editable.
-            # But the prompt says "The date in the cards is not editable". This sounds like a complaint about the current state OR a description of the desired state.
-            # "it should display a calendar widget to pick it" -> This strongly suggests they want to be able to PICK the date.
-            # So I will make it editable.
-
-            date_edit.setReadOnly(False)
-            # But wait, if I change it here, does it update the backend?
-            # The current architecture updates via `edit_card` dialog.
-            # If I make this editable here, I need to connect the signal to an update function.
-            # The CardWidget doesn't have easy access to the data manager or board controller directly to trigger an update.
-            # Let's look at how `CardWidget` is used. It's created in `populate_card_list`.
-            # `populate_card_list` is in `KanbanApp`.
-
-            # If the user just wants the VISUAL of a calendar widget instead of a label, but still read-only in the card view (and editable in the dialog), that's one interpretation.
-            # But "to pick it" implies action.
-
-            # Let's assume for a moment the user wants to change the date directly on the card.
-            # I would need to expose a signal from CardWidget that KanbanApp can connect to.
-
-            # However, re-reading: "The date in the cards is not editable, it should display a calendar widget to pick it"
-            # It could mean "Currently it is not editable (problem), it should display a calendar widget to pick it (solution)".
-
-            # So I will replace the QLabel with a QDateEdit.
-            # I will disable text entry (setReadOnly(False) but maybe setButtonSymbols or something? No, QDateEdit is fine).
-            # I need to handle the dateChanged signal.
-
-            date_edit.setDisplayFormat("dd/MM/yyyy")
+            date_label = QLabel(dt_obj.strftime("%d/%m/%Y"))
+            date_label.setObjectName("cardDueDate")
             if is_overdue:
-                date_edit.setProperty("class", "overdue")
+                date_label.setProperty("class", "overdue")
 
-            # Store the original date to check for changes if needed, or just emit signal on change.
-            return date_edit
+            return date_label
         except (ValueError, TypeError):
             return None
 
@@ -283,6 +259,7 @@ class CardListWidget(QListWidget):
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QListWidget.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
         # Context menu handled by parent KanbanApp
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         if parent is not None:
@@ -297,7 +274,8 @@ class CardListWidget(QListWidget):
         if not item:
             return
         card = item.data(Qt.UserRole)
-        from PySide6.QtGui import QDrag, QMimeData
+        from PySide6.QtGui import QDrag
+        from PySide6.QtCore import QMimeData
         drag = QDrag(self)
         mime = QMimeData()
         try:
@@ -306,6 +284,20 @@ class CardListWidget(QListWidget):
             mime.setText(str(card.get('id')) if isinstance(card, dict) else str(card))
         drag.setMimeData(mime)
         drag.exec(Qt.MoveAction)
+
+    def dragEnterEvent(self, event):
+        md = event.mimeData()
+        if md and md.hasFormat('application/x-card'):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        md = event.mimeData()
+        if md and md.hasFormat('application/x-card'):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
 
     def dropEvent(self, event):
         # Read card data from mime (set by source list)
@@ -326,6 +318,7 @@ class CardListWidget(QListWidget):
                     self.move_callback(card, self.board_id, self.stack_id)
                 except Exception:
                     pass
+            event.acceptProposedAction()
         except Exception:
             super().dropEvent(event)
         finally:
@@ -728,12 +721,6 @@ class KanbanApp(QMainWindow):
         for card_data in cards:
             card_widget = CardWidget(card_data)
 
-            # Connect the date changed signal if the widget exists
-            if card_widget._duedate_widget:
-                card_widget._duedate_widget.dateChanged.connect(
-                    partial(self.handle_card_date_change, card_widget)
-                )
-
             list_item = QListWidgetItem()
             list_item.setData(Qt.UserRole, card_data)
             list_item.setSizeHint(card_widget.sizeHint())
@@ -1039,7 +1026,7 @@ class KanbanApp(QMainWindow):
             if cards:
                 for c in cards:
                     try:
-                        self.data_manager.update_card(c['board_id'], c['stack_id'], c['id'], stack_id=new_stack_id)
+                        self.data_manager.update_card(c['board_id'], c['stack_id'], c['id'], new_stack_id=new_stack_id)
                     except Exception:
                         pass
             # 4) delete old stack
