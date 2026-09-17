@@ -546,6 +546,7 @@ class KanbanApp(QMainWindow):
         self.current_board_id = None
         self.threadpool = QThreadPool()
         self.active_workers = set()
+        self.stack_card_lists = {}
 
         self.splitter = QSplitter(Qt.Horizontal);
         self.setCentralWidget(self.splitter)
@@ -695,6 +696,7 @@ class KanbanApp(QMainWindow):
         card_list_widget.move_callback = self.move_card
         card_list_widget.itemDoubleClicked.connect(self.edit_card)
         add_card_btn.clicked.connect(partial(self.add_new_card, stack['id'], card_list_widget))
+        self.stack_card_lists[(board_id, stack['id'])] = card_list_widget
 
         layout.addWidget(title_bar_frame)
         layout.addWidget(add_card_btn)
@@ -796,8 +798,31 @@ class KanbanApp(QMainWindow):
                 self.show_error("El título es obligatorio.")
                 return
             self.status_label.setText("Creando tarjeta...")
-            # Pass description and duedate to create_card if provided
-            on_success = lambda c: self.load_board(self.current_board_id)
+            temp_id = -int(datetime.now().timestamp() * 1000000)
+            optimistic_card = {
+                'id': temp_id,
+                'board_id': self.current_board_id,
+                'stack_id': stack_id,
+                'title': title,
+                'description': card_data.get('description', ''),
+                'duedate': card_data.get('duedate'),
+                'labels_json': json.dumps([]),
+                'owner': self.data_manager.current_username,
+            }
+            self.data_manager.db.save_card(optimistic_card)
+            self.upsert_card_item(optimistic_card)
+
+            def on_success(result):
+                if isinstance(result, dict) and result.get('id'):
+                    final_card = dict(optimistic_card)
+                    final_card.update(result)
+                    final_card['board_id'] = self.current_board_id
+                    final_card['stack_id'] = stack_id
+                    self.data_manager.db.rename_card_id(temp_id, result['id'])
+                    self.data_manager.db.save_card(final_card)
+                    self.upsert_card_item(final_card)
+                self.status_label.setText("Tarjeta creada.")
+
             self.run_worker(
                 lambda: self.data_manager.create_card(
                     self.current_board_id, stack_id, title,
@@ -814,7 +839,20 @@ class KanbanApp(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             updated_data = dialog.get_updated_data()
             self.status_label.setText(f"Actualizando tarjeta '{card_data['title']}'...")
-            on_success = lambda card: self.load_board(self.current_board_id)
+
+            optimistic_card = dict(card_data)
+            optimistic_card.update(updated_data)
+            self.data_manager.db.save_card(optimistic_card)
+            self.upsert_card_item(optimistic_card)
+
+            def on_success(result):
+                if isinstance(result, dict):
+                    final_card = dict(optimistic_card)
+                    final_card.update(result)
+                    self.data_manager.db.save_card(final_card)
+                    self.upsert_card_item(final_card)
+                self.status_label.setText("Tarjeta actualizada.")
+
             self.run_worker(
                 lambda: self.data_manager.update_card(card_data['board_id'], card_data['stack_id'], card_data['id'],
                                                       **updated_data),
@@ -847,14 +885,19 @@ class KanbanApp(QMainWindow):
             return
         self.status_label.setText(f"Moviendo tarjeta '{card_data.get('title')}'...")
 
+        moved_card = self.move_card_item(card_data, dest_board_id, dest_stack_id)
+        self.data_manager.db.save_card(moved_card)
+
         def do_move():
             # call update_card with original board/stack and payload specifying new stack
             return self.data_manager.update_card(card_data['board_id'], card_data['stack_id'], card_data['id'], new_stack_id=dest_stack_id)
 
         def on_success(result):
-            # Refresh current board if affected
-            if self.current_board_id in (card_data.get('board_id'), dest_board_id):
-                self.load_board(self.current_board_id)
+            if isinstance(result, dict):
+                final_card = dict(moved_card)
+                final_card.update(result)
+                self.data_manager.db.save_card(final_card)
+                self.upsert_card_item(final_card)
             self.status_label.setText("Tarjeta movida.")
 
         self.run_worker(do_move, on_success, "Error al mover tarjeta")
@@ -1041,9 +1084,62 @@ class KanbanApp(QMainWindow):
         self.run_worker(do_move, on_done, "Error al mover lista")
 
     def clear_board_layout(self):
+        self.stack_card_lists.clear()
         while self.board_layout.count():
             child = self.board_layout.takeAt(0)
             if child.widget(): child.widget().deleteLater()
+
+    def get_card_list_widget(self, board_id, stack_id):
+        return self.stack_card_lists.get((board_id, stack_id))
+
+    def find_card_item(self, list_widget, card_id):
+        if not list_widget:
+            return None
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            card = item.data(Qt.UserRole)
+            if isinstance(card, dict) and card.get('id') == card_id:
+                return item
+        return None
+
+    def upsert_card_item(self, card_data):
+        list_widget = self.get_card_list_widget(card_data['board_id'], card_data['stack_id'])
+        if not list_widget:
+            return
+        item = self.find_card_item(list_widget, card_data['id'])
+        card_widget = CardWidget(card_data)
+        if item:
+            item.setData(Qt.UserRole, card_data)
+            item.setSizeHint(card_widget.sizeHint())
+            list_widget.setItemWidget(item, card_widget)
+        else:
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, card_data)
+            item.setSizeHint(card_widget.sizeHint())
+            list_widget.addItem(item)
+            list_widget.setItemWidget(item, card_widget)
+
+    def remove_card_item(self, board_id, stack_id, card_id):
+        list_widget = self.get_card_list_widget(board_id, stack_id)
+        if not list_widget:
+            return
+        item = self.find_card_item(list_widget, card_id)
+        if item is not None:
+            row = list_widget.row(item)
+            list_widget.takeItem(row)
+
+    def move_card_item(self, card_data, dest_board_id, dest_stack_id):
+        old_board_id = card_data['board_id']
+        old_stack_id = card_data['stack_id']
+        if old_board_id == dest_board_id and old_stack_id == dest_stack_id:
+            return dict(card_data)
+
+        self.remove_card_item(old_board_id, old_stack_id, card_data['id'])
+        moved_card = dict(card_data)
+        moved_card['board_id'] = dest_board_id
+        moved_card['stack_id'] = dest_stack_id
+        self.upsert_card_item(moved_card)
+        return moved_card
 
     def show_error(self, message):
         self.status_label.setText(f"Error: {message}")

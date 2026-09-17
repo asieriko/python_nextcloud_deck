@@ -120,6 +120,33 @@ class DatabaseManager:
     def get_card_by_id(self, card_id):
         return self._execute("SELECT * FROM cards WHERE id = ?", (card_id,), fetchone=True)
 
+    def save_card(self, card):
+        owner = card.get('owner')
+        if isinstance(owner, dict):
+            owner = owner.get('uid') or owner.get('username')
+
+        labels_json = card.get('labels_json')
+        if labels_json is None and card.get('labels') is not None:
+            labels_json = json.dumps(card.get('labels', []))
+
+        self._execute(
+            "INSERT OR REPLACE INTO cards (id, stack_id, board_id, title, description, duedate, labels_json, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                card['id'],
+                card['stack_id'],
+                card['board_id'],
+                card['title'],
+                card.get('description'),
+                card.get('duedate'),
+                labels_json,
+                owner,
+            ),
+            commit=True,
+        )
+
+    def rename_card_id(self, old_id, new_id):
+        self._execute("UPDATE cards SET id = ? WHERE id = ?", (new_id, old_id), commit=True)
+
     # --- Cambios Offline ---
     def queue_offline_change(self, method, endpoint, payload):
         # Sanitize payload before queuing to avoid API validation errors (e.g., color with leading '#')
