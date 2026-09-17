@@ -633,7 +633,9 @@ class KanbanApp(QMainWindow):
 
     def load_boards(self):
         self.status_label.setText("Cargando tableros...")
-        self.run_worker(self.data_manager.get_boards, self.populate_board_list, "Error al cargar tableros")
+        self.populate_board_list(self.data_manager.get_boards())
+        if self.data_manager.is_online():
+            self.run_worker(self.data_manager.refresh_boards_from_api, self.populate_board_list, "Error al cargar tableros")
 
     def populate_board_list(self, boards):
         self.board_list_widget.clear()
@@ -650,12 +652,20 @@ class KanbanApp(QMainWindow):
     def load_board(self, board_id):
         self.current_board_id = board_id;
         self.status_label.setText(f"Cargando tablero ID: {board_id}...")
-        self.clear_board_layout()
-        self.run_worker(lambda: self.data_manager.get_stacks(board_id), self.display_board, f"Error al cargar pilas")
+        self.render_board(board_id, self.data_manager.get_stacks(board_id))
+        if self.data_manager.is_online():
+            self.run_worker(
+                lambda: self.data_manager.refresh_stacks_from_api(board_id),
+                lambda stacks, bid=board_id: self.render_board(bid, stacks),
+                f"Error al cargar pilas"
+            )
 
-    def display_board(self, stacks):
+    def render_board(self, board_id, stacks):
+        if board_id != self.current_board_id:
+            return
+        self.clear_board_layout()
         for stack in stacks:
-            stack_widget = self.create_stack_widget(self.current_board_id, stack)
+            stack_widget = self.create_stack_widget(board_id, stack)
             self.board_layout.addWidget(stack_widget)
         self.add_new_stack_widget();
         self.status_label.setText("Tablero cargado.")

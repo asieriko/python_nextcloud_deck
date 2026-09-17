@@ -89,21 +89,29 @@ class DataManager:
 
     # --- Métodos de Datos con Lógica de Sincronización ---
     def get_boards(self):
-        if self.is_online():
-            try:
-                boards_from_api = self.api.get_boards()
-                self.db.save_boards(boards_from_api)
-            except requests.exceptions.RequestException as e:
-                print(f"No se pudo sincronizar tableros: {e}")
         return self.db.get_boards()
 
     def get_stacks(self, board_id):
-        if self.is_online():
-            try:
-                stacks_from_api = self.api.get_stacks_with_cards(board_id)
-                self.db.save_stacks_and_cards(board_id, stacks_from_api)
-            except requests.exceptions.RequestException as e:
-                print(f"No se pudo sincronizar pilas/tarjetas: {e}")
+        return self.db.get_stacks(board_id)
+
+    def refresh_boards_from_api(self):
+        if not self.is_online():
+            return self.db.get_boards()
+        try:
+            boards_from_api = self.api.get_boards()
+            self.db.save_boards(boards_from_api)
+        except requests.exceptions.RequestException as e:
+            print(f"No se pudo sincronizar tableros: {e}")
+        return self.db.get_boards()
+
+    def refresh_stacks_from_api(self, board_id):
+        if not self.is_online():
+            return self.db.get_stacks(board_id)
+        try:
+            stacks_from_api = self.api.get_stacks_with_cards(board_id)
+            self.db.save_stacks_and_cards(board_id, stacks_from_api)
+        except requests.exceptions.RequestException as e:
+            print(f"No se pudo sincronizar pilas/tarjetas: {e}")
         return self.db.get_stacks(board_id)
 
     def get_cards(self, board_id, stack_id):
